@@ -8,8 +8,9 @@
 # Needs Docker with armhf emulation, zig, python3 with Pillow, and an mpc-vst-plugins checkout
 # (MPC_VST) for its skin tooling. The skin artwork is drawn by the browser renderer
 # (tools/html_art.py, "mpc-vst-html-art" Docker image: headless Chromium + Pillow) for real
-# Titillium Web text, knob value arcs and transparent-edge controls -- build that image once from
-# $MPC_VST/tools/html_art/Dockerfile if it isn't present locally.
+# Titillium Web text, knob value arcs and transparent-edge controls -- not published to any
+# registry, so build it here from $MPC_VST/tools/html_art/Dockerfile (cached by tag after the
+# first build, on a dev machine and in CI alike).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 MPC_VST="${MPC_VST:?set MPC_VST to an mpc-vst-plugins checkout}"
@@ -19,6 +20,7 @@ scripts/build-pyzlib.sh
 scripts/build-python.sh
 vst/build.sh
 
+docker build -q -t mpc-vst-html-art "$MPC_VST/tools/html_art"
 docker run --rm -e SHADOW_ART=/mpcvst/tools/html_art.py -v "$PWD":/repo -v "$MPC_VST":/mpcvst \
   -w /repo mpc-vst-html-art:latest python3 vst/gen_skin.py
 
