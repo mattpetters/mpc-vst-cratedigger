@@ -5,8 +5,11 @@
 #   vst/build/pluginlist-entry.xml
 #   vst/build/engine/bin/                          -> payload/vst/cratedigger/bin (release.py --extra):
 #       yt-dlp, ffmpeg/ffprobe, the private Python 3.11 and zlib module, yt_dlp_daemon.py
-# Needs Docker with armhf emulation, zig, python3 with Pillow, a C compiler, and an mpc-vst-plugins
-# checkout (MPC_VST) for its vendored skin artwork renderer.
+# Needs Docker with armhf emulation, zig, python3 with Pillow, and an mpc-vst-plugins checkout
+# (MPC_VST) for its skin tooling. The skin artwork is drawn by the browser renderer
+# (tools/html_art.py, "mpc-vst-html-art" Docker image: headless Chromium + Pillow) for real
+# Titillium Web text, knob value arcs and transparent-edge controls -- build that image once from
+# $MPC_VST/tools/html_art/Dockerfile if it isn't present locally.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 MPC_VST="${MPC_VST:?set MPC_VST to an mpc-vst-plugins checkout}"
@@ -16,8 +19,8 @@ scripts/build-pyzlib.sh
 scripts/build-python.sh
 vst/build.sh
 
-gcc -O2 -I"$MPC_VST/tools/vendor/force-shadow/tools" -o vst/build/shadow_art vst/shadow_art.c -lm
-python3 vst/gen_skin.py
+docker run --rm -e SHADOW_ART=/mpcvst/tools/html_art.py -v "$PWD":/repo -v "$MPC_VST":/mpcvst \
+  -w /repo mpc-vst-html-art:latest python3 vst/gen_skin.py
 
 rm -rf vst/build/engine
 mkdir -p vst/build/engine/bin
