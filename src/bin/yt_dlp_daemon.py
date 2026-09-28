@@ -847,7 +847,11 @@ class CrateDigSession:
         seen_pages = set()
         release_lookups = 0
         max_page_fetches = 3   # 100 entries/page, 3 pages = 300 candidates
-        max_release_lookups = count * 4  # cap individual release API calls
+        # Capped independently of count (not just count*4): count's ceiling went from 5 to 16
+        # for more/fuller results pages, but each lookup is its own Discogs API call, and the
+        # unauthenticated rate limit is only 25/min -- so a single search must stay well under
+        # that regardless of how many results were asked for.
+        max_release_lookups = min(count * 4, 20)
 
         # Use first page from pool probe if available (saves 1 API call)
         pages_data = []
@@ -1018,8 +1022,8 @@ def cratedig_search(session: CrateDigSession, count_text: str) -> None:
         count = 3
     if count < 1:
         count = 1
-    if count > 5:
-        count = 5
+    if count > 16:   # 2 full pages of the plugin's 8-row results list (was capped at 5: only
+        count = 16   # ever filled 1 page, and the page stepper always read "1/1")
 
     try:
         releases = session.get_random_releases(count)
