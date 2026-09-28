@@ -1872,6 +1872,18 @@ static void* resolve_thread_main(void *arg) {
     return NULL;
 }
 
+/* yt-dlp errors that mean the video itself is gone (dead Discogs link, private, removed,
+ * region-blocked): the legacy fallback would fail the same way and just end in EOF. */
+static bool resolve_error_is_dead_video(const char *e) {
+    static const char *const needles[] = {"unavailable", "Private video", "removed", "terminated",
+                                          "not available", "been deleted", "copyright"};
+    size_t i;
+    if (!e || !e[0]) return false;
+    for (i = 0; i < sizeof(needles) / sizeof(needles[0]); i++)
+        if (strcasestr(e, needles[i])) return true;
+    return false;
+}
+
 static int start_resolve_async(yt_instance_t *inst) {
     if (!inst) return -1;
 
@@ -2868,7 +2880,13 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
         if (inst->seek_discard_samples > 0) return snprintf(buf, (size_t)buf_len, "seeking");
         if (!inst->pipe && inst->restart_countdown > 0) return snprintf(buf, (size_t)buf_len, "loading");
         if (!inst->pipe && !inst->stream_eof) return snprintf(buf, (size_t)buf_len, "loading");
-        if (inst->stream_eof) return snprintf(buf, (size_t)buf_len, "eof");
+        if (inst->stream_eof) {
+            bool dead;
+            pthread_mutex_lock(&inst->resolve_mutex);
+            dead = resolve_error_is_dead_video(inst->resolve_error);
+            pthread_mutex_unlock(&inst->resolve_mutex);
+            return snprintf(buf, (size_t)buf_len, dead ? "unavailable" : "eof");
+        }
         avail = ring_available(inst);
         if (inst->prime_needed_samples > 0 && avail < inst->prime_needed_samples) {
             return snprintf(buf, (size_t)buf_len, "buffering");
@@ -3146,7 +3164,17 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
                     start_prefetch_next(inst);
                 }
             } else if (resolve_failed) {
-                /* Resolve failed in background; fail over to legacy stream pipeline now. */
+                /* Resolve failed in background; fail over to legacy stream pipeline now,
+                 * unless the video is simply gone (shown as UNAVAILABLE, not EOF). */
+                bool dead;
+                pthread_mutex_lock(&inst->resolve_mutex);
+                dead = resolve_error_is_dead_video(inst->resolve_error);
+                pthread_mutex_unlock(&inst->resolve_mutex);
+                if (dead) {
+                    inst->stream_eof = true;
+                    inst->restart_countdown = 0;
+                    resolve_failed = false;
+                }
             } else if (!resolve_running) {
                 if (start_resolve_async(inst) < 0) {
                     resolve_failed = true;
