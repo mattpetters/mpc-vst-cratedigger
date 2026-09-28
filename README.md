@@ -115,7 +115,13 @@ target device before shipping.
 
 ## Installation
 
-Unzip a release (or build the payload yourself), copy it to the device,
+**One line, on the device** (needs internet; save your project first):
+
+```sh
+cd /tmp && wget -qO cd.zip https://github.com/sd88me/mpc-vst-cratedigger/releases/download/cratedigger-vst-v1.1/Crate-Digger-1.1-mpc-armv7.zip && unzip -qo cd.zip && sh Crate-Digger-1.1/install.sh
+```
+
+Or unzip a release (or build the payload yourself), copy it to the device,
 and run its installer:
 
 ```sh
