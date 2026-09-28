@@ -17,17 +17,19 @@ independently of `count` (`max_release_lookups = min(count * 4, 20)` in
 the unauthenticated rate limit is only 25/min (see `docs/TROUBLESHOOTING.md`) — raising the
 results count shouldn't multiply the rate-limit risk by the same factor.
 
-## 2. Scroll wheel feels "funky" moving through filters
+## 2. Scroll wheel feels "funky" moving through filters — DONE
 
-`vst/cratedigger_vst.cpp:296-306`: a Q-Link/scroll-wheel turn always steps the stepper by
-exactly ±1, regardless of how far the wheel moved — it only jumps further when the computed
-position lands within 0.001 of an exact multiple. Fast scrolling sends bigger position deltas
-per callback, so it feels inconsistent (sometimes 1 step, occasionally more).
+`vst/cratedigger_vst.cpp`'s stepper `setParameter` mixed two behaviors: a Q-Link/scroll-wheel
+value that landed within 0.001 of an exact step boundary jumped straight there (possibly by
+more than one step), while everything else nudged by exactly ±1 regardless of how far the
+value had moved — same physical motion, inconsistent step size.
 
-Next: repro on-device with Q-Link turn speed logged, then likely accumulate fractional turn
-distance across calls instead of snapping per-call.
+Fixed: replaced both branches with one deterministic rule — land on `round(pos)`, clamped to
+the stepper's range. A bigger turn now reliably moves further; a small one reliably moves one
+step.
 
-## 3. Long queue time → error → SEARCH again does nothing → stuck until new instance
+## 3. Long queue time → error → SEARCH again does nothing → stuck until new instance —
+INVESTIGATING (logging in place)
 
 `yt_stream_plugin.c`'s queued-search protocol (`start_search_async`/`search_thread_main`,
 `queued_search_pending`) looks correct on read-through — a queued request should auto-fire when
@@ -36,17 +38,24 @@ persistent `yt_dlp_daemon.py` subprocess itself wedges after a timeout/error and
 subsequent request blocks forever (would better explain "never searches again" than the
 thread-queue logic alone).
 
-Next: on-device repro with `/tmp/webstream-runtime.log` captured through a full stuck cycle.
+`start_search_async()` now logs its thread_valid/thread_running/queued state and which path it
+took (run now / queue / restart) to `/tmp/webstream-runtime.log`, and every log line in both
+that file and `vst/cratedigger_vst.cpp`'s `/tmp/cratedigger_vst.log` is timestamped so the two
+can be read as one timeline. Next: a user (or us) reproduces it and attaches both logs — see
+`docs/TROUBLESHOOTING.md`'s "Helping us debug" section.
 
-## 4. Playing a track, then searching again "breaks" selection until a new instance
+## 4. Playing a track, then searching again "breaks" selection until a new instance —
+INVESTIGATING (logging in place)
 
 Needs tracing through what state `play_result`/`stream_url` is in when a new `cratedig_filter`
 search lands mid-playback, and whether the stream needs an explicit stop first. The reporting
 user's own hunch ("stop before searching?") is a plausible workaround to confirm — if true,
 either enforce it automatically (stop stream on new search) or fix the underlying conflict.
 
-May share a root cause with #3 (search/stream state left dirty across actions) — worth
-investigating together.
+The `stream_url` setter now logs the previous stream's state (pipe/eof/paused) before it's
+replaced, and the wrapper logs every SEARCH press and result tap with the engine's
+search_status/stream_status at that moment — same repro process as #3, and may share a root
+cause with it (search/stream state left dirty across actions).
 
 ## 5. Buffer-time countdown before playback starts
 
