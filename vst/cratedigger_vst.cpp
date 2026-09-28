@@ -59,7 +59,12 @@ enum {
     effProcessEvents = 25, effCanBeAutomated = 26, effGetPlugCategory = 35, effGetEffectName = 45,
     effGetVendorString = 47, effGetProductString = 48, effGetVendorVersion = 49, effCanDo = 51, effGetVstVersion = 58,
 };
-enum { audioMasterAutomate = 0, audioMasterUpdateDisplay = 42 };
+enum { audioMasterAutomate = 0, audioMasterGetTime = 7, audioMasterUpdateDisplay = 42 };
+enum { kVstTransportPlaying = 1 << 1 };
+struct VstTimeInfo {
+    double samplePos, sampleRate, nanoSeconds, ppqPos, tempo, barStartPos, cycleStartPos, cycleEndPos;
+    int32_t timeSigNumerator, timeSigDenominator, smpteOffset, smpteFrameRate, samplesToNextClock, flags;
+};
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5, effFlagsIsSynth = 1 << 8 };
 
 /* ---- constants ------------------------------------------------------------ */
@@ -85,6 +90,12 @@ struct Plugin {
     volatile char release[NPARAMS];       /* triggers to report back to 0 */
     float step_seen[NPARAMS];             /* last raw value MPC sent to each stepper (-1 = none yet) */
     float last[NPARAMS];                  /* last value MPC set, per param (triggers fire on change) */
+    /* Transport Sync: a tapped result loads and buffers, then waits for MPC's Play. */
+    bool sync = false;                    /* under lock */
+    bool hold = false;                    /* under lock: a track is buffered and waiting */
+    bool sync_started = false;            /* under lock: MPC Play released the current track */
+    std::atomic<bool> transport_playing{false};
+    std::atomic<int> transport_edge{0};   /* +1 = MPC started, -1 = MPC stopped; worker consumes */
     std::string shown;                    /* all display text at the last UpdateDisplay */
     char chunk[256];
 };
@@ -184,6 +195,9 @@ static bool play_result(Plugin *p, int idx) {
     std::snprintf(s, sizeof s, "%d", idx);
     LOG("play_result idx=%d prev_stream_status=%s prev_stream_url=%s\n", idx,
         core_get(p, "stream_status").c_str(), core_get(p, "stream_url").c_str());
+    p->hold = p->sync;
+    p->sync_started = false;
+    p->api->set_param(p->core, "hold_start", p->hold ? "1" : "0");
     p->api->set_param(p->core, "stream_provider", prov.empty() ? "youtube" : prov.c_str());
     p->api->set_param(p->core, "stream_url", url.c_str());
     p->api->set_param(p->core, "cratedig_result_index", s);
@@ -230,6 +244,23 @@ static void flush_releases(Plugin *p) {
         if (p->release[i]) { p->release[i] = 0; p->last[i] = 0.0f; p->master(&p->fx, audioMasterAutomate, i, 0, nullptr, 0.0f); }
 }
 
+/* MPC Play releases a buffered track (or resumes a paused one); MPC Stop pauses it. */
+static void transport_edge_locked(Plugin *p, bool playing) {
+    std::string st = core_get(p, "stream_status");
+    LOG("transport %s: hold=%d stream_status=%s\n", playing ? "play" : "stop", p->hold, st.c_str());
+    if (playing) {
+        if (p->hold) {
+            p->hold = false;
+            p->sync_started = true;
+            p->api->set_param(p->core, "hold_start", "0");
+        } else if (st == "paused") {
+            p->api->set_param(p->core, "play_pause_toggle", "1");
+        }
+    } else if (!p->hold && (st == "streaming" || st == "buffering")) {
+        p->api->set_param(p->core, "play_pause_toggle", "1");
+    }
+}
+
 /* ---- worker: the core renders here, never on MPC's audio thread ------------ */
 static void worker_main(Plugin *p) {
     int16_t block[BLOCK * 2];
@@ -240,6 +271,10 @@ static void worker_main(Plugin *p) {
             next_ui = now + std::chrono::milliseconds(200);
             flush_releases(p);
             refresh_display(p);
+        }
+        if (int edge = p->transport_edge.exchange(0)) {
+            std::lock_guard<std::mutex> lk(p->lock);
+            if (p->sync) transport_edge_locked(p, edge > 0);
         }
         uint32_t fill = p->wpos.load() - p->rpos.load();
         if (fill + BLOCK > (uint32_t)TARGET_FILL) {
@@ -263,6 +298,14 @@ static void worker_main(Plugin *p) {
 static void processReplacing(AEffect *e, float **in, float **out, int32_t n) {
     Plugin *p = (Plugin *)e->object;
     (void)in;
+    if (p->sync) {
+        VstTimeInfo *ti = (VstTimeInfo *)p->master(&p->fx, audioMasterGetTime, 0, kVstTransportPlaying, nullptr, 0.0f);
+        bool now = ti && (ti->flags & kVstTransportPlaying);
+        if (now != p->transport_playing.load()) {
+            p->transport_playing.store(now);
+            p->transport_edge.store(now ? 1 : -1);
+        }
+    }
     uint32_t r = p->rpos.load(), avail = p->wpos.load() - r;
     for (int32_t i = 0; i < n; i++) {
         if ((uint32_t)i < avail) {
@@ -365,6 +408,16 @@ static void setParameter(AEffect *e, int32_t i, float v) {
         stepper_set(p, P_PAGE, (p->page + (i == P_PAGE_NEXT ? 1 : -1) + n) % n);
     } else if (i == P_SEARCH) {
         do_search(p);
+    } else if (i == P_TRANSPORT_SYNC) {
+        p->sync = !p->sync;
+        p->transport_playing.store(false);
+        p->transport_edge.store(0);
+        if (!p->sync && p->hold) { p->hold = false; p->api->set_param(p->core, "hold_start", "0"); }
+        LOG("transport sync %s\n", p->sync ? "on" : "off");
+    } else if (i == P_PLAY_PAUSE && p->hold) {
+        /* Manual start while waiting for MPC's Play. */
+        p->hold = false;
+        p->api->set_param(p->core, "hold_start", "0");
     } else if (i == P_PLAY_PAUSE) {
         /* Like the host: with nothing loaded, play the highlighted result. */
         if (core_get(p, "stream_url").empty()) play_result(p, std::atoi(core_get(p, "cratedig_result_index").c_str()));
@@ -400,6 +453,7 @@ static std::string display(Plugin *p, int i) {
     }
     case T_READOUT:
         if (i == P_STATUS) return upper(core_get(p, "stream_status"));
+        if (i == P_SYNC_STATE) return p->sync ? "SYNC ON" : "SYNC OFF";
         if (i == P_TIME) return core_get(p, "playback_time");
         if (i == P_SEARCH_STATUS) return upper(core_get(p, "search_status"));
         if (i == P_NOW_PLAYING) {

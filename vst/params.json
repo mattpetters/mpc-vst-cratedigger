@@ -40,6 +40,8 @@
     {"key": "result_5", "name": "Result 5", "type": "slot"},
     {"key": "result_6", "name": "Result 6", "type": "slot"},
     {"key": "result_7", "name": "Result 7", "type": "slot"},
-    {"key": "result_8", "name": "Result 8", "type": "slot"}
+    {"key": "result_8", "name": "Result 8", "type": "slot"},
+    {"key": "transport_sync", "name": "Transport Sync", "type": "trigger"},
+    {"key": "sync_state", "name": "Transport Sync State", "type": "readout"}
   ]
 }

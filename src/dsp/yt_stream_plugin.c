@@ -157,6 +157,7 @@ typedef struct {
     uint8_t pending_len;
     size_t prime_needed_samples;
     bool paused;
+    bool hold_start;   /* Transport Sync: load + buffer, but stay silent until released */
     size_t played_samples;
     size_t seek_discard_samples;
     double resume_offset_sec;  /* seek position for stream reconnect */
@@ -2561,6 +2562,11 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
         return;
     }
 
+    if (strcmp(key, "hold_start") == 0) {
+        inst->hold_start = (val && val[0] == '1');
+        return;
+    }
+
     if (strcmp(key, "play_pause_toggle") == 0) {
         if (inst->stream_url[0] != '\0' && !inst->stream_eof) {
             inst->paused = !inst->paused;
@@ -2891,6 +2897,7 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
         if (inst->prime_needed_samples > 0 && avail < inst->prime_needed_samples) {
             return snprintf(buf, (size_t)buf_len, "buffering");
         }
+        if (inst->hold_start) return snprintf(buf, (size_t)buf_len, "ready");
         return snprintf(buf, (size_t)buf_len, "streaming");
     }
 
@@ -3207,6 +3214,8 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
         }
         inst->prime_needed_samples = 0;
     }
+
+    if (inst->hold_start) return;   /* buffered and waiting for the MPC transport */
 
     got = ring_pop(inst, out_interleaved_lr, needed);
 
