@@ -143,6 +143,11 @@ public rate limit). For 60/min, generate a free personal access token at
 { "providers": { "cratedig": { "token": "YOUR_DISCOGS_PERSONAL_TOKEN" } } }
 ```
 
+## Troubleshooting
+
+Search showing an "error" status, rate limits, and reading the on-device log: see
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
 ## CPU
 
 Measured on a Gen1 device (Cortex-A17) with `tools/bench.sh` from
