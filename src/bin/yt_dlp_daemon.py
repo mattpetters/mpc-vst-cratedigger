@@ -734,6 +734,13 @@ class SampletteSession:
         return data
 
 
+class RateLimited(Exception):
+    """Discogs answered 429; carries the suggested wait in seconds."""
+    def __init__(self, retry_after: int):
+        super().__init__(f"Discogs rate limit hit, retry in ~{retry_after}s")
+        self.retry_after = retry_after
+
+
 class CrateDigSession:
     DISCOGS_BASE = "https://api.discogs.com"
     MAX_EXCLUDE_IDS = 200
@@ -762,9 +769,14 @@ class CrateDigSession:
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     return json.loads(resp.read().decode("utf-8", errors="replace"))
             except urllib.error.HTTPError as exc:
-                if exc.code == 429 and attempt < 2:
-                    time.sleep(3)
-                    continue
+                if exc.code == 429:
+                    # Don't sleep-and-retry: that just burns the search timeout (and the plugin
+                    # then retries the whole search). Report it, with Discogs' own wait hint.
+                    try:
+                        wait = int(exc.headers.get("Retry-After") or 60)
+                    except Exception:
+                        wait = 60
+                    raise RateLimited(min(max(wait, 1), 120))
                 raise
             except urllib.error.URLError as exc:
                 if attempt < 2:
@@ -869,6 +881,10 @@ class CrateDigSession:
 
                 try:
                     data = self._request("/database/search", params)
+                except RateLimited:
+                    if found:
+                        break
+                    raise
                 except Exception:
                     continue
 
@@ -890,6 +906,10 @@ class CrateDigSession:
                 release_lookups += 1
                 try:
                     release = self._request(f"/releases/{release_id}")
+                except RateLimited:
+                    if found:
+                        return found
+                    raise
                 except Exception:
                     continue
 
