@@ -21,7 +21,7 @@ scripts/build-python.sh
 vst/build.sh
 
 docker build -q -t mpc-vst-html-art "$MPC_VST/tools/html_art"
-docker run --rm -e SHADOW_ART=/mpcvst/tools/html_art.py -v "$PWD":/repo -v "$MPC_VST":/mpcvst \
+docker run --rm -e MPC_VST=/mpcvst -v "$PWD":/repo -v "$MPC_VST":/mpcvst \
   -w /repo mpc-vst-html-art:latest python3 vst/gen_skin.py
 
 rm -rf vst/build/engine

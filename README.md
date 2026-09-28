@@ -88,7 +88,7 @@ linux/arm/v7`):
 ./scripts/build-pyzlib.sh  # build the private zlib module (needs zig on PATH)
 ./scripts/build-python.sh  # fetch the private Python 3.11 yt-dlp runs under
 ./vst/build.sh             # compile vst/build/cratedigger.so
-python3 vst/gen_skin.py    # build the MPC skin into vst/build/skin/
+vst/build_skin.sh          # build the MPC skin into vst/build/skin/ (Docker; needs an mpc-vst-plugins checkout, MPC_VST or ~/mpc-vst)
 ```
 
 `vst/build.sh` also prints the plugin's exported symbols, needed shared
