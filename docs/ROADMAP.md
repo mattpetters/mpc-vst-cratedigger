@@ -75,3 +75,30 @@ start on it instead of the SEARCH/tap trigger.
 
 Biggest, most design-y item on this list — lowest urgency, scope properly (ideally with the
 user who suggested it) before building.
+
+## 7. Saved MPC preset errors when used to search — NEW
+
+Report: saving a filter setup as an MPC preset, then searching from that preset, errors.
+The preset is our `effGetChunk`/`effSetChunk` string (`g=;s=;d=;r=;c=;gain=`, dimension
+*indexes* only) in `vst/cratedigger_vst.cpp`. Leads: `effSetChunk` calls `set_dim` for genre,
+style, decade, region and country in one go, but style and country depend on genre and region,
+so a stored style/country index may be applied against the wrong (or not yet loaded) option
+list; and nothing checks that the restored indexes are in range for the current lists. Next:
+reproduce with `/tmp/cratedigger_vst.log`, and compare the filter values the search actually
+sends after a chunk restore with what the UI shows.
+
+## 8. Jog wheel: one click takes 1-2 s to register — NEW
+
+Report: a single detent in either direction is slow, but fast spinning is fine, so an
+accidental landing costs a wait to scroll away. Not fixed by #2, which only changed the step
+size. Leads: `setParameter` holds `p->lock` while `stepper_set` runs, and the worker holds
+the same lock during `render_block`; the display refresh only runs every 200 ms in
+`worker_main`. Next: time `stepper_set`, check whether a dependent-list refresh
+(genre → style, region → country) blocks, and consider refreshing the display straight after
+a step instead of waiting for the tick.
+
+## 9. Feedback from the same report that is already tracked
+
+Scroll-wheel feel (#2), the results page stuck at 1/1 (#1), search errors and being stuck
+after an error (#3), selection breaking after playback (#4) and the buffer countdown (#5) are
+already listed above.
