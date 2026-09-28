@@ -32,16 +32,34 @@ plugin skin itself.)
   happen on MPC's real-time audio thread.
 - **Filters**: Genre, Style (depends on Genre), Decade, Region, Country
   (depends on Region) — five steppers, a SEARCH button, and a status
-  readout, all as VST parameters MPC's Q-Links can reach.
+  readout, all as VST parameters MPC's Q-Links can reach. The jog wheel
+  steps one entry per click, in either direction.
 - **Transport**: Play/Pause, Stop, ±15s seek, a gain knob, and NOW
-  PLAYING / STATUS / TIME readouts.
-- **Results**: an 8-row (2×4), paged results list on the PLAY tab —
-  tapping a row plays it.
+  PLAYING / STATUS / TIME readouts (LCD-style dot-matrix displays for NOW
+  PLAYING and TIME).
+- **Transport Sync**: a **TRANSPORT SYNC** button (grey when off, amber
+  when on) for resampling. With it on, tapping a result loads and buffers
+  the track but holds it silent (STATUS reads **READY**) until you press
+  Play on the MPC; the track then starts from the top, in time with the
+  MPC's transport. MPC Stop pauses it and MPC Play resumes it. The
+  plugin's own play/pause button starts a waiting track by hand. Turn
+  sync off and a waiting track plays immediately.
+- **Results**: up to 16 results per search in a paged 8-row (2×4) list on
+  the PLAY tab (two pages) — tapping a row plays it. A result whose
+  YouTube video has been removed or blocked shows **UNAVAILABLE** in
+  STATUS instead of ending in a bare EOF; just tap another row.
+- **Discogs rate limit**: if Discogs answers "too many requests", the
+  search stops at once and says how long to wait (or returns what it had
+  already found) instead of hanging until it times out. A free Discogs
+  token raises the limit (see below).
+- **Presets**: the filter selection and gain are saved with MPC presets
+  and projects; a malformed preset is ignored rather than applied.
 - **Skin**: a native MPC screen skin (`TUI.json` + Q-Links) built from
   `vst/layout.conf` via
   [mpc-vst-plugins](https://github.com/sd88me/mpc-vst-plugins)'
   `shadow_skin.py`, in the same MPC60-inspired theme as the addon this
-  plugin was converted from.
+  plugin was converted from. The artwork is drawn by mpc-vst-plugins'
+  browser renderer (`vst/build_skin.sh`).
 
 ## How it works
 

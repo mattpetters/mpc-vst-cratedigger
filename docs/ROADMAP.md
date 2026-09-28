@@ -57,7 +57,7 @@ replaced, and the wrapper logs every SEARCH press and result tap with the engine
 search_status/stream_status at that moment — same repro process as #3, and may share a root
 cause with it (search/stream state left dirty across actions).
 
-## 5. Buffer-time countdown before playback starts
+## 5. Buffer-time countdown before playback starts — SKIPPED for now
 
 New feature: give the user a window to switch to the sampler and arm record before audio
 starts, up to 5s. `search_elapsed_ms` is precedent for this kind of timing instrumentation;
@@ -66,7 +66,7 @@ would need an equivalent for the resolve+buffer phase (`resolve_stream_url` /
 
 Needs a design decision: an on-screen countdown, or just a fixed delay before playback starts.
 
-## 6. Transport-sync button
+## 6. Transport-sync button — DONE (v1.1)
 
 New feature: play a buffered track in time with MPC's own transport (press Play on the device
 to start it), to assist with resampling. Would use `audioMasterGetTime` (already used
@@ -76,7 +76,7 @@ start on it instead of the SEARCH/tap trigger.
 Biggest, most design-y item on this list — lowest urgency, scope properly (ideally with the
 user who suggested it) before building.
 
-## 7. Saved MPC preset errors when used to search — NEW
+## 7. Saved MPC preset errors when used to search — HARDENED (v1.1)
 
 Report: saving a filter setup as an MPC preset, then searching from that preset, errors.
 The preset is our `effGetChunk`/`effSetChunk` string (`g=;s=;d=;r=;c=;gain=`, dimension
@@ -87,7 +87,7 @@ list; and nothing checks that the restored indexes are in range for the current 
 reproduce with `/tmp/cratedigger_vst.log`, and compare the filter values the search actually
 sends after a chunk restore with what the UI shows.
 
-## 8. Jog wheel: one click takes 1-2 s to register — NEW
+## 8. Jog wheel: one click takes 1-2 s to register — DONE (v1.1)
 
 Report: a single detent in either direction is slow, but fast spinning is fine, so an
 accidental landing costs a wait to scroll away. Not fixed by #2, which only changed the step
