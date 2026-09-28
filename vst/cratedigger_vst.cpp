@@ -342,6 +342,7 @@ static float getParameter(AEffect *e, int32_t i) {
     }
     case T_FLOAT: return (p->gain - PARAMS[i].min) / (PARAMS[i].max - PARAMS[i].min);
     case T_SLOT: return current_result(p) == p->page * SLOTS + (i - P_RESULT_1) ? 1.0f : 0.0f;
+    case T_TRIGGER: return i == P_TRANSPORT_SYNC && p->sync ? 1.0f : 0.0f;   /* sticky: lights the button */
     default: return 0.0f;
     }
 }
@@ -391,7 +392,19 @@ static void setParameter(AEffect *e, int32_t i, float v) {
         if (fire && idx < result_count(p)) play_result(p, idx);
         return;
     }
-    case T_TRIGGER: break;
+    case T_TRIGGER:
+        if (i == P_TRANSPORT_SYNC) {
+            /* A sticky on/off, not a momentary trigger: the button stays lit while sync is on. */
+            bool on = v > 0.5f;
+            if (on == p->sync) return;
+            p->sync = on;
+            p->transport_playing.store(false);
+            p->transport_edge.store(0);
+            if (!on && p->hold) { p->hold = false; p->api->set_param(p->core, "hold_start", "0"); }
+            LOG("transport sync %s\n", on ? "on" : "off");
+            return;
+        }
+        break;
     default: return;
     }
     /* A tap on a button toggles its value; fire on any change, so a button MPC still shows as
@@ -408,12 +421,6 @@ static void setParameter(AEffect *e, int32_t i, float v) {
         stepper_set(p, P_PAGE, (p->page + (i == P_PAGE_NEXT ? 1 : -1) + n) % n);
     } else if (i == P_SEARCH) {
         do_search(p);
-    } else if (i == P_TRANSPORT_SYNC) {
-        p->sync = !p->sync;
-        p->transport_playing.store(false);
-        p->transport_edge.store(0);
-        if (!p->sync && p->hold) { p->hold = false; p->api->set_param(p->core, "hold_start", "0"); }
-        LOG("transport sync %s\n", p->sync ? "on" : "off");
     } else if (i == P_PLAY_PAUSE && p->hold) {
         /* Manual start while waiting for MPC's Play. */
         p->hold = false;
