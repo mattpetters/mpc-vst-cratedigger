@@ -529,6 +529,11 @@ static void set_search_status(yt_instance_t *inst, const char *status, const cha
     if (!inst) return;
     snprintf(inst->search_status, sizeof(inst->search_status), "%s", status ? status : "idle");
     snprintf(inst->search_error, sizeof(inst->search_error), "%s", err ? err : "");
+    if (err && err[0]) {
+        char buf[320];
+        snprintf(buf, sizeof(buf), "search %s: %s", status ? status : "error", err);
+        yt_log(buf);
+    }
 }
 
 static void normalize_provider_value(const char *in, char *out, size_t out_len) {
