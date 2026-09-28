@@ -58,3 +58,33 @@ Open an issue at <https://github.com/sd88me/mpc-vst-cratedigger/issues> with:
 - The exact `search error:` line from `/tmp/webstream-runtime.log`.
 - Whether a Discogs token is configured.
 - The genre/style/decade/region/country filters in use at the time.
+
+## Helping us debug "search stops responding" or "playback breaks after a new search"
+
+These two are still open (see [ROADMAP.md](ROADMAP.md)) and haven't been reproduced yet off a
+device, so the fastest way to move them forward is a log capture while reproducing one. As of
+this version, every log line in both files below is timestamped (`[seconds.milliseconds]`), so
+the two logs can be read together as one timeline of what happened and in what order.
+
+1. Reproduce the issue:
+   - **Search gets stuck**: trigger a slow/failing search (e.g. searching right after another
+     one, or with a filter combo that returns nothing quickly), wait for the `error` status,
+     then press SEARCH again and confirm it doesn't restart.
+   - **Playback breaks after a new search**: start a track playing from one search's results,
+     then run a new search (with the track still playing) and try to select a track from the
+     new results.
+2. Immediately after, grab both log files:
+   ```sh
+   ssh root@<device-ip> cat /tmp/webstream-runtime.log
+   ssh root@<device-ip> cat /tmp/cratedigger_vst.log
+   ```
+3. Attach both (full, not just the tail) to an issue at
+   <https://github.com/sd88me/mpc-vst-cratedigger/issues>, along with:
+   - What you did, step by step, and roughly when (so it can be matched to the timestamps).
+   - Whether a Discogs token is configured.
+
+`/tmp/webstream-runtime.log` now also logs, for every search dispatch, whether it ran
+immediately, queued behind one already running, or restarted a stuck daemon — and for every new
+track selection, what the previous stream's state was (still resolving, still playing, etc.).
+`/tmp/cratedigger_vst.log` logs every SEARCH press and every result tap from the plugin's own
+side, with the same timestamp clock.

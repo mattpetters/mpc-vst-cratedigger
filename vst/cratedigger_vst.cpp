@@ -90,7 +90,14 @@ struct Plugin {
 
 /* ---- small helpers -------------------------------------------------------- */
 static FILE *g_log;
-#define LOG(...) do { if (g_log) { std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); } } while (0)
+/* [sec.msec] prefix lines up against the engine's own /tmp/webstream-runtime.log (also
+ * wall-clock-stamped), so a bug report's two log files can be read as one timeline. */
+#define LOG(...) do { if (g_log) { \
+        auto __now = std::chrono::system_clock::now().time_since_epoch(); \
+        long long __ms = std::chrono::duration_cast<std::chrono::milliseconds>(__now).count(); \
+        std::fprintf(g_log, "[%lld.%03lld] ", __ms / 1000, __ms % 1000); \
+        std::fprintf(g_log, __VA_ARGS__); std::fflush(g_log); \
+    } } while (0)
 
 static std::string core_get(Plugin *p, const char *key) {
     char buf[512];
@@ -174,6 +181,8 @@ static bool play_result(Plugin *p, int idx) {
     std::string prov = core_get_idx(p, "search_result_provider_%d", idx);
     char s[16];
     std::snprintf(s, sizeof s, "%d", idx);
+    LOG("play_result idx=%d prev_stream_status=%s prev_stream_url=%s\n", idx,
+        core_get(p, "stream_status").c_str(), core_get(p, "stream_url").c_str());
     p->api->set_param(p->core, "stream_provider", prov.empty() ? "youtube" : prov.c_str());
     p->api->set_param(p->core, "stream_url", url.c_str());
     p->api->set_param(p->core, "cratedig_result_index", s);
@@ -190,8 +199,10 @@ static void do_search(Plugin *p) {
                        "\",\"decade\":\"" + json_escape(dim_value(p, DIM_DECADE)) +
                        "\",\"country\":\"" + json_escape(dim_value(p, DIM_COUNTRY)) + "\"}";
     p->page = 0;
+    LOG("search pressed: prev_search_status=%s stream_status=%s stream_url=%s filter=%s\n",
+        core_get(p, "search_status").c_str(), core_get(p, "stream_status").c_str(),
+        core_get(p, "stream_url").c_str(), json.c_str());
     p->api->set_param(p->core, "cratedig_filter", json.c_str());
-    LOG("search %s\n", json.c_str());
 }
 
 static std::string display(Plugin *p, int i);
@@ -297,12 +308,19 @@ static void setParameter(AEffect *e, int32_t i, float v) {
     std::lock_guard<std::mutex> lk(p->lock);
     switch (PARAMS[i].type) {
     case T_STEPPER: {
-        /* On an item: select it. Between items: a Q-Link/encoder nudge, step one. */
-        int n = stepper_count(p, i), cur = stepper_index(p, i);
-        float pos = (v < 0 ? 0 : v > 1 ? 1 : v) * (n - 1);
+        /* Always land on the index MPC's absolute value implies, instead of the previous
+         * "exact multiple of 1/(n-1) -> jump there, anything else -> nudge by exactly 1"
+         * split: that made a Q-Link/scroll-wheel turn feel inconsistent -- most values never
+         * land exactly on a step boundary, so the common case was always a single ±1 nudge no
+         * matter how far the wheel moved, while turns that happened to hit a boundary jumped by
+         * more than one at once ("funky": same physical motion, different-sized steps). Landing
+         * on round(pos) is deterministic either way and moves further for a bigger motion.
+         */
+        int n = stepper_count(p, i);
         if (n < 2) return;
-        if (std::fabs(pos - std::round(pos)) < 0.001f) stepper_set(p, i, (int)std::lround(pos));
-        else stepper_set(p, i, cur + (pos > cur ? 1 : -1));
+        int target = (int)std::lround((v < 0 ? 0 : v > 1 ? 1 : v) * (n - 1));
+        if (target < 0) target = 0; else if (target > n - 1) target = n - 1;
+        stepper_set(p, i, target);
         return;
     }
     case T_FLOAT: {

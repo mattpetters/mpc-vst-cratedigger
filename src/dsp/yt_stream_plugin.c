@@ -242,12 +242,19 @@ typedef struct {
     char download_title[SEARCH_TEXT_MAX];
 } yt_instance_t;
 
+static uint64_t now_ms(void);
+
 static void append_ws_log(const char *msg) {
     FILE *fp;
+    uint64_t ms;
     if (!msg || msg[0] == '\0') return;
     fp = fopen(WS_RUNTIME_LOG_PATH, "a");
     if (!fp) return;
-    fprintf(fp, "%s\n", msg);
+    ms = now_ms();
+    /* [sec.msec] lets a repro report be lined up against cratedigger_vst.cpp's own
+     * /tmp/cratedigger_vst.log (also wall-clock-stamped) and against the user's own
+     * account of when they pressed something. */
+    fprintf(fp, "[%llu.%03llu] %s\n", (unsigned long long)(ms / 1000), (unsigned long long)(ms % 1000), msg);
     fclose(fp);
 }
 
@@ -1622,10 +1629,17 @@ static void* search_thread_main(void *arg) {
 
 static int start_search_async(yt_instance_t *inst, const char *query) {
     char provider[PROVIDER_MAX];
+    char log_msg[256];
 
     if (!inst || !query || query[0] == '\0') return -1;
 
     normalize_provider_value(inst->search_provider, provider, sizeof(provider));
+
+    snprintf(log_msg, sizeof(log_msg),
+             "start_search_async: thread_valid=%d thread_running=%d queued_pending=%d status=%s",
+             inst->search_thread_valid, inst->search_thread_running, inst->queued_search_pending,
+             inst->search_status);
+    yt_log(log_msg);
 
     if (inst->search_thread_valid && !inst->search_thread_running) {
         pthread_join(inst->search_thread, NULL);
@@ -1637,6 +1651,7 @@ static int start_search_async(yt_instance_t *inst, const char *query) {
         snprintf(inst->queued_search_query, sizeof(inst->queued_search_query), "%s", query);
         inst->queued_search_pending = true;
         set_search_status(inst, "queued", "search queued");
+        yt_log("start_search_async: a search is already running -- queued this one");
         return 1;
     }
 
@@ -2475,6 +2490,17 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
     if (strcmp(key, "stream_url") == 0) {
         char clean_url[STREAM_URL_MAX];
         char clean_provider[PROVIDER_MAX];
+        /* A new selection while the previous one was still resolving/playing is the suspected
+         * trigger for "picking a new sample after a search breaks the VST" -- log the state
+         * being replaced, not just the new one (below), so a repro shows what it interrupted. */
+        {
+            char log_msg[384];
+            snprintf(log_msg, sizeof(log_msg),
+                     "stream_url replacing: prev_url=%s pipe=%d eof=%d paused=%d restart_countdown=%d",
+                     inst->stream_url[0] ? inst->stream_url : "(none)", inst->pipe != NULL,
+                     inst->stream_eof, inst->paused, inst->restart_countdown);
+            yt_log(log_msg);
+        }
         if (val[0] == '\0') {
             stop_everything(inst);
             return;
