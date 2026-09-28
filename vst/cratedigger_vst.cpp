@@ -83,6 +83,7 @@ struct Plugin {
     int page = 0;
     float gain = 1.0f;
     volatile char release[NPARAMS];       /* triggers to report back to 0 */
+    float step_seen[NPARAMS];             /* last raw value MPC sent to each stepper (-1 = none yet) */
     float last[NPARAMS];                  /* last value MPC set, per param (triggers fire on change) */
     std::string shown;                    /* all display text at the last UpdateDisplay */
     char chunk[256];
@@ -308,17 +309,26 @@ static void setParameter(AEffect *e, int32_t i, float v) {
     std::lock_guard<std::mutex> lk(p->lock);
     switch (PARAMS[i].type) {
     case T_STEPPER: {
-        /* Always land on the index MPC's absolute value implies, instead of the previous
-         * "exact multiple of 1/(n-1) -> jump there, anything else -> nudge by exactly 1"
-         * split: that made a Q-Link/scroll-wheel turn feel inconsistent -- most values never
-         * land exactly on a step boundary, so the common case was always a single ±1 nudge no
-         * matter how far the wheel moved, while turns that happened to hit a boundary jumped by
-         * more than one at once ("funky": same physical motion, different-sized steps). Landing
-         * on round(pos) is deterministic either way and moves further for a bigger motion.
+        /* Step relative to the last value MPC sent, not by rounding its absolute value: one
+         * jog detent moves MPC's 0..1 value by well under half a step, so round(v*(n-1)) left
+         * the index unchanged until several clicks piled up (the 1-2 s "delay" on a single
+         * click), while a fast spin, whose values do cross steps, felt fine. Any change now
+         * moves at least one step in its direction; a bigger jump moves proportionally more.
+         * MPC echoing back the position we report (getParameter) is ignored.
          */
         int n = stepper_count(p, i);
         if (n < 2) return;
-        int target = (int)std::lround((v < 0 ? 0 : v > 1 ? 1 : v) * (n - 1));
+        v = v < 0 ? 0 : v > 1 ? 1 : v;
+        int cur = stepper_index(p, i);
+        float shown_v = (float)cur / (n - 1);
+        float base = p->step_seen[i] < 0 ? shown_v : p->step_seen[i];
+        p->step_seen[i] = v;
+        if (std::fabs(v - shown_v) < 1e-4f) return;
+        float dv = v - base;
+        if (std::fabs(dv) < 1e-6f) dv = v - shown_v;
+        int steps = (int)std::lround(std::fabs(dv) * (n - 1));
+        if (steps < 1) steps = 1;
+        int target = cur + (dv > 0 ? steps : -steps);
         if (target < 0) target = 0; else if (target > n - 1) target = n - 1;
         stepper_set(p, i, target);
         return;
@@ -478,8 +488,13 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
         s[v - 1] = 0;
         int g = 0, st = 0, d = 0, r = 0, c = 0;
         float gn = 1.0f;
-        std::sscanf(s, "g=%d;s=%d;d=%d;r=%d;c=%d;gain=%f", &g, &st, &d, &r, &c, &gn);
+        int got = std::sscanf(s, "g=%d;s=%d;d=%d;r=%d;c=%d;gain=%f", &g, &st, &d, &r, &c, &gn);
+        LOG("effSetChunk '%s' parsed=%d\n", s, got);
+        if (got < 5) return 0;   /* not one of ours: keep the current filters */
+        if (got < 6 || !(gn >= 0.0f && gn <= 4.0f)) gn = 1.0f;
         std::lock_guard<std::mutex> lk(p->lock);
+        p->page = 0;
+        for (int i = 0; i < NPARAMS; i++) p->step_seen[i] = -1.0f;
         set_dim(p, DIM_GENRE, g); set_dim(p, DIM_STYLE, st); set_dim(p, DIM_DECADE, d);
         set_dim(p, DIM_REGION, r); set_dim(p, DIM_COUNTRY, c);
         char gs[32];
@@ -508,6 +523,7 @@ extern "C" __attribute__((visibility("default"))) AEffect *VSTPluginMain(audioMa
     plugin_api_v2_t *api = move_plugin_init_v2(nullptr);
     if (!api) return nullptr;
     Plugin *p = new Plugin();
+    for (int i = 0; i < NPARAMS; i++) p->step_seen[i] = -1.0f;
     p->api = api;
     p->master = master;
     std::memset((void *)p->release, 0, sizeof p->release);
