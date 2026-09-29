@@ -17,16 +17,19 @@ on:
 
 jobs:
   crate-digger:
-    uses: sd88me/mpc-vst-plugins/.github/workflows/vst-release.yml@87d722b86c1ab8c800cf153640165447a6b3913b
+    uses: sd88me/mpc-vst-plugins/.github/workflows/vst-release.yml@f8ef06441f36dee6c4f2cc32ac9fe0e50b6318af
     permissions:
       contents: write
     with:
       tag: cratedigger-vst-v${{ inputs.version }}
       version: ${{ inputs.version }}
-      tools_ref: 87d722b86c1ab8c800cf153640165447a6b3913b
+      tools_ref: f8ef06441f36dee6c4f2cc32ac9fe0e50b6318af
       vst_dir: vst
       build: vst/release_build.sh
       extra: vst/build/engine/bin:vst/cratedigger/bin
       zig: 0.14.1
+      plugin_id: crate-digger
+      license: MIT
+      requires: A network connection (streams from Discogs and the web)
       about: Dig for records by genre, style, decade and country on Discogs, then stream and play them into your MPC track. Needs a network connection.
       dry_run: ${{ inputs.dry_run }}
