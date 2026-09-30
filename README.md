@@ -142,16 +142,14 @@ the page.
 
 ### Install by hand
 
-1. Copy the files:
-   - `payload/vst/cratedigger.so` → `/sdcard/vst/cratedigger.so`
-   - `payload/vst/cratedigger/bin` → `/sdcard/vst/cratedigger/bin`
-   - `payload/Synths/sd88me - VST - Crate Digger/` →
-     `/sdcard/Synths/sd88me - VST - Crate Digger/`
+1. Copy the plugin folder `portable/sd88me - VST - Crate Digger/` (the `.so`, the skin and the `cratedigger/bin` engine
+   in one folder) to `/sdcard/Synths/sd88me - VST - Crate Digger/`. Keep the executable bits and the symlinks inside
+   `cratedigger/bin` (copy with `scp -r` or `tar`, not by unzipping on Windows), or use the installer, which restores them.
 2. Stop MPC: `systemctl stop acvs`.
 3. Back up `MPC.settings` (on a Force:
    `/media/az01-internal/Settings/MPC/MPC.settings`).
 4. Inside `<VALUE name="pluginList-arm"><KNOWNPLUGINS>`, add the
-   `<PLUGIN .../>` line from `plugin.xml` (create the `pluginList-arm`
+   `<PLUGIN .../>` line from the folder's `plugin-meta.xml`, with `%payload-path%` replaced by `/sdcard/Synths` (create the `pluginList-arm`
    value, just before `</PROPERTIES>`, if there isn't one yet).
 5. Start MPC: `systemctl start acvs`. If MPC comes up with default
    settings, restore your backup — the XML was malformed.
