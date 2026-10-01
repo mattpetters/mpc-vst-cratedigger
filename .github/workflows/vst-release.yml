@@ -17,13 +17,13 @@ on:
 
 jobs:
   crate-digger:
-    uses: sd88me/mpc-vst-plugins/.github/workflows/vst-release.yml@73397e0a09f4d9b8d6513cbd446e3a2da203680f
+    uses: sd88me/mpc-vst-plugins/.github/workflows/vst-release.yml@d55a4316ac57b08b5eec31a417559c1a5c3d11b9
     permissions:
       contents: write
     with:
       tag: cratedigger-vst-v${{ inputs.version }}
       version: ${{ inputs.version }}
-      tools_ref: 73397e0a09f4d9b8d6513cbd446e3a2da203680f
+      tools_ref: d55a4316ac57b08b5eec31a417559c1a5c3d11b9
       vst_dir: vst
       build: vst/release_build.sh
       extra: vst/build/engine/bin:cratedigger/bin
