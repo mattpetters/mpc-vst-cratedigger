@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 vst/gen_params.py
-docker run --rm --platform linux/arm/v7 -u "$(id -u):$(id -g)" -v "$PWD":/b -w /b arm32v7/gcc:12 bash -euxc '
+docker run --rm --platform linux/arm/v7 -u "$(id -u):$(id -g)" -v "$PWD":/b -w /b arm32v7/gcc:11-bullseye bash -euxc '
   mkdir -p vst/build/obj
   gcc -O2 -fPIC -fvisibility=hidden -std=gnu11 -DYT_POSIX_SPAWN -Isrc/include -Isrc/dsp \
       -c src/dsp/yt_stream_plugin.c -o vst/build/obj/core.o
@@ -18,6 +18,6 @@ docker run --rm --platform linux/arm/v7 -u "$(id -u):$(id -g)" -v "$PWD":/b -w /
   strip vst/build/cratedigger.so
   echo "-- exported --"; readelf --dyn-syms -W vst/build/cratedigger.so | grep -E " GLOBAL .* [0-9]+ [A-Za-z]" | grep -v UND
   echo "-- needed --"; readelf -d vst/build/cratedigger.so | grep NEEDED
-  echo "-- highest glibc (device has 2.39) --"; readelf -V vst/build/cratedigger.so | grep -o "GLIBC_[0-9.]*" | sort -uV | tail -1
+  echo "-- highest glibc (MPC OS 2.x has 2.32) --"; readelf -V vst/build/cratedigger.so | grep -o "GLIBC_[0-9.]*" | sort -uV | tail -1
 '
 md5sum vst/build/cratedigger.so
