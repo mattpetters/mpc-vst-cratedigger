@@ -673,7 +673,9 @@ class SampletteSession:
 
     def init_session(self):
         html = self._request("/")
-        m = re.search(r'csrf-token"\s+content="([^"]+)"', html)
+        # attribute order varies (samplette.io now serves content="..." name="csrf-token"): find the tag, then its content
+        tag = re.search(r'<meta\b[^>]*\bname="csrf-token"[^>]*>', html)
+        m = re.search(r'\bcontent="([^"]+)"', tag.group(0)) if tag else None
         if not m:
             raise RuntimeError("samplette: csrf token not found")
         self.csrf_token = m.group(1)
