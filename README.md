@@ -1,5 +1,8 @@
 # Crate Digger (MPC VST Plugin)
 
+> **Requires MPC OS 3.x.** MPC OS 2.x needs further development: the touchscreen skins do not draw there yet (the page
+> stays empty). See [MPC OS 2.x vs 3.x](https://github.com/sd88me/mpc-vst-plugins#mpc-os-2x-vs-3x) in the main repo.
+
 **Crate Digger** — a native MPC OS VST2 instrument plugin for Akai MPC
 standalone devices (Force, MPC Live/Live II, One, X, Key 61): dig for
 records by genre, style, decade, region and country on Discogs, then
