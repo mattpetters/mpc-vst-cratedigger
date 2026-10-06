@@ -21,7 +21,8 @@ scripts/build-python.sh
 vst/build.sh
 
 docker build -q -t mpc-vst-html-art "$MPC_VST/tools/html_art"
-docker run --rm -e MPC_VST=/mpcvst -v "$PWD":/repo -v "$MPC_VST":/mpcvst \
+# SHADOW_SKIN_MPC_OS=2 (set by the caller) writes the skin in the MPC OS 2.x shape: it has to be passed into the container.
+docker run --rm -e MPC_VST=/mpcvst ${SHADOW_SKIN_MPC_OS:+-e SHADOW_SKIN_MPC_OS="$SHADOW_SKIN_MPC_OS"} -v "$PWD":/repo -v "$MPC_VST":/mpcvst \
   -w /repo mpc-vst-html-art:latest python3 vst/gen_skin.py
 
 rm -rf vst/build/engine
