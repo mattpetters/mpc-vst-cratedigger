@@ -70,7 +70,19 @@ echo "-- fetched yt-dlp $YTDLP_VERSION (latest) --"
 
 echo "=== Downloading ffmpeg/ffprobe (johnvansickle.com armhf static) ==="
 FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-armhf-static.tar.xz"
-curl -fL -o "$WORK_DIR/ffmpeg-armhf.tar.xz" "$FFMPEG_URL"
+# johnvansickle.com sometimes answers a CI runner with a small non-archive page (HTTP 200), which
+# then fails in tar ("xz: File format not recognized"). Retry, and only accept a valid xz file.
+ffmpeg_ok=0
+for attempt in 1 2 3 4 5; do
+  if curl -fL --retry 3 --retry-delay 5 -o "$WORK_DIR/ffmpeg-armhf.tar.xz" "$FFMPEG_URL" \
+     && xz -t "$WORK_DIR/ffmpeg-armhf.tar.xz" 2>/dev/null; then
+    ffmpeg_ok=1
+    break
+  fi
+  echo "ffmpeg download attempt $attempt failed (not a valid xz archive); retrying in $((attempt * 15))s"
+  sleep $((attempt * 15))
+done
+[ "$ffmpeg_ok" = 1 ] || { echo "Could not download a valid ffmpeg archive from $FFMPEG_URL"; exit 1; }
 rm -rf "$WORK_DIR/ffmpeg-extract"
 mkdir -p "$WORK_DIR/ffmpeg-extract"
 tar -xJf "$WORK_DIR/ffmpeg-armhf.tar.xz" -C "$WORK_DIR/ffmpeg-extract"
