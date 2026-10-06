@@ -100,7 +100,9 @@ static pid_t yt_spawn(const char *path, char *const argv[], int in_fd, int out_f
 #define HTTP_HEADER_MAX 384
 #define DAEMON_LINE_MAX 4096
 #define DAEMON_START_TIMEOUT_MS 12000
-#define DAEMON_SEARCH_TIMEOUT_MS 12000
+/* Longer than the daemon's own 20 s HTTP timeouts, so a slow Discogs/samplette gives a real error, not a plugin timeout
+ * (a cold search takes ~7-12 s on a Force; 12 s here made searches fail intermittently). */
+#define DAEMON_SEARCH_TIMEOUT_MS 30000
 #define DAEMON_RESOLVE_TIMEOUT_MS 12000
 #define WS_RUNTIME_LOG_PATH "/tmp/webstream-runtime.log"
 
