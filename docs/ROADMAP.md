@@ -102,3 +102,36 @@ a step instead of waiting for the tick.
 Scroll-wheel feel (#2), the results page stuck at 1/1 (#1), search errors and being stuck
 after an error (#3), selection breaking after playback (#4) and the buffer countdown (#5) are
 already listed above.
+
+## 10. Search by text (title/artist/label) — DONE
+
+New SEARCH tab: type a term and search Discogs by text as well as by facet, for
+"get me this record" rather than a lucky dip.
+
+- **Where the term goes**: into the same `cratedig_filter` JSON the steppers
+  already build (a `query` field), so the engine core needed no change at all —
+  `src/bin/yt_dlp_daemon.py` sends it as Discogs' `q=`, combined with whatever
+  genre/style/country/year facets are set (verified live 2026-10-07:
+  `q=roy ayers&genre=Jazz&year=1976` narrows 666 items to 50).
+- **How it is typed**: the host has no text entry (mpc-vst-plugins docs/NOTES.md
+  — "No text entry on the page"), so the box is built from a skin `popup` key
+  grid: 43 keys plus one deliberately dead last cell. MPC sends nothing when the
+  option it believes is selected is tapped, so the wrapper reports *that* dead
+  cell as the grid's current value — no real key can ever be the "already
+  selected" one, and typing the same letter twice works. The buffer itself is
+  `vst/query_edit.h`, which has a plain host test (`vst/test_query_edit.c`,
+  21 checks) since it is logic rather than glue.
+- **Ranking**: a text search keeps Discogs' relevance order, walks the top of the
+  result list rather than sampling random pages, drops duplicate video URLs,
+  ignores `exclude_ids` (the same term twice must give the same releases) and
+  caps release lookups near `count` (fewer Discogs calls than the filter path,
+  which matters against the unauthenticated 25/min limit).
+- **MORE BY ARTIST**: re-searches the artist of the last result row tapped — no
+  typing, same plumbing.
+- **Not quietly narrowed**: `FILTERS IN USE` on the SEARCH tab names the facets
+  the next search will send, since a text query still combines with them.
+- Empty text → SEARCH is exactly the old filter behaviour, byte for byte.
+
+Still to verify on a device: the key grid's drawn list and its dead cell, and
+the flag round-trip that closes it (all read off mpc-vst-plugins' popup
+mechanism at the pinned tools ref, not yet seen on hardware).

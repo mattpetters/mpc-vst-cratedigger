@@ -1,5 +1,9 @@
 {
-  "_comment": "VST parameter table for the Crate Digger plugin. ORDER IS THE VST INDEX: append only, never reorder (projects and the skin bind to indices). types: stepper (index into a dynamic list; value text = item), trigger (fires on >0.5, springs back), float, readout (display-only text), slot (result row: value text = title, tap = play, value 1 = playing).",
+  "_comment": "VST parameter table for the Crate Digger plugin. ORDER IS THE VST INDEX: append only, never reorder (projects and the skin bind to indices). types: stepper (index into a dynamic list; value text = item), trigger (fires on >0.5, springs back), float, readout (display-only text), slot (result row: value text = title, tap = play, value 1 = playing), grid (one key of the search text: 'chars' lists the character each cell types, 'options' the label each cell draws -- one label more than chars, the last being a dead cell), flag (a hidden skin-only 0/1, named by popup_of).",
+  "_comment_search": "The SEARCH tab's parameters. The MPC plugin host has no text entry (mpc-vst-plugins docs/NOTES.md), so the search text is typed one key at a time from query_key's key grid; vst/query_edit.h holds the buffer, the skin's popup field shows whatever query_text says, and the picked text rides to Discogs inside the same filter JSON the facet steppers use (src/bin/yt_dlp_daemon.py sends it as Discogs' q=).",
+  "_comment_grid_spacer": "query_key's LAST option is a dead cell: the wrapper always reports that index as the grid's current value, and MPC sends nothing for the cell it thinks is already selected -- so no real key can ever be the 'already selected' one and typing the same letter twice always works. It is also why 'options' has exactly one entry more than 'chars' (gen_params.py asserts that).",
+  "_comment_open": "query_key__open is the hidden flag a skin popup needs (the shape mpc-vst-plugins' shadow_skin.popup_params emits). Skin-only state: never sent to the engine, never saved in a preset. Picking a key clears it, which closes the drawn grid.",
+  "_comment_search_rest": "query_artist re-searches using the artist of the last result row tapped (no typing). query_filters displays the facet steppers the next search will send, so a text search is never quietly narrowed by a filter left over from browsing.",
   "name": "Crate Digger",
   "vendor": "sd88me",
   "uid": "CrDg",
@@ -42,6 +46,22 @@
     {"key": "result_7", "name": "Result 7", "type": "slot"},
     {"key": "result_8", "name": "Result 8", "type": "slot"},
     {"key": "transport_sync", "name": "Transport Sync", "type": "trigger"},
-    {"key": "sync_state", "name": "Transport Sync State", "type": "readout"}
+    {"key": "sync_state", "name": "Transport Sync State", "type": "readout"},
+    {"key": "query_text", "name": "Search Text", "type": "readout"},
+    {"key": "query_pos", "name": "Cursor", "type": "stepper"},
+    {"key": "query_pos_prev", "name": "Cursor <", "type": "trigger"},
+    {"key": "query_pos_next", "name": "Cursor >", "type": "trigger"},
+    {"key": "query_key", "name": "Keys", "type": "grid",
+     "chars": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -.'&/+",
+     "options": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P",
+                 "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+                 "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+                 "SP", "-", ".", "'", "&", "/", "+", ""]},
+    {"key": "query_key__open", "name": "Keys List", "type": "flag", "popup_of": "query_key",
+     "options": ["Closed", "Open"]},
+    {"key": "query_del", "name": "Delete", "type": "trigger"},
+    {"key": "query_clear", "name": "Clear Text", "type": "trigger"},
+    {"key": "query_artist", "name": "More By Artist", "type": "trigger"},
+    {"key": "query_filters", "name": "Filters In Use", "type": "readout"}
   ]
 }
