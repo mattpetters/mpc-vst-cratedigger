@@ -31,6 +31,7 @@
 #include "plugin_api_v1.h"
 #include "cratedig_tables.h"
 #include "params_gen.h"
+#include "query_edit.h"
 
 extern "C" plugin_api_v2_t *move_plugin_init_v2(const host_api_v1_t *host);
 
@@ -96,6 +97,14 @@ struct Plugin {
     bool sync_started = false;            /* under lock: MPC Play released the current track */
     std::atomic<bool> transport_playing{false};
     std::atomic<int> transport_edge{0};   /* +1 = MPC started, -1 = MPC stopped; worker consumes */
+    /* SEARCH tab (text search): the typed text (query_edit.h) is the only thing this plugin can
+     * call a "keyboard" -- the host has no text entry -- so it lives here next to the cursor, the
+     * last result row tapped (MORE BY ARTIST re-searches on it) and the key grid's open flag. */
+    char query[QE_LEN + 1] = {0};         /* +1: always NUL-terminated for snprintf/JSON, even with all 32 slots full */
+    int qpos = 0;                         /* cursor into query[] */
+    int sel = 0;                          /* last result row tapped */
+    float key_open = 0.0f;                /* the key grid's hidden popup flag (skin-only, never saved) */
+    std::atomic<bool> ui_now{false};      /* a key was picked: flush the display now, not at the 200 ms tick */
     std::string shown;                    /* all display text at the last UpdateDisplay */
     char chunk[256];
 };
@@ -208,16 +217,68 @@ static int current_result(Plugin *p) {
     return std::atoi(core_get(p, "cratedig_result_index").c_str());
 }
 
+/* ---- search text: the SEARCH tab's box, typed from the key grid ----------- */
+static std::string query_string(Plugin *p) { return std::string(p->query, (size_t)qe_len(p->query)); }
+
+/* The facet steppers the next search will send, so a text search is never quietly narrowed by a
+ * filter left over from browsing the FILTERS tab (the empty entries are Discogs' "Any"). */
+static std::string filter_summary(Plugin *p) {
+    std::string s;
+    for (int d = 0; d < NDIMS; d++) {
+        const char *v = dim_value(p, d);
+        if (!v || !v[0]) continue;
+        if (!s.empty()) s += " / ";
+        s += upper(v);
+    }
+    return s.empty() ? std::string("ANY") : s;
+}
+
 static void do_search(Plugin *p) {
+    std::string q = query_string(p);
     std::string json = std::string("{\"genre\":\"") + json_escape(dim_value(p, DIM_GENRE)) +
                        "\",\"style\":\"" + json_escape(dim_value(p, DIM_STYLE)) +
                        "\",\"decade\":\"" + json_escape(dim_value(p, DIM_DECADE)) +
-                       "\",\"country\":\"" + json_escape(dim_value(p, DIM_COUNTRY)) + "\"}";
+                       "\",\"country\":\"" + json_escape(dim_value(p, DIM_COUNTRY)) +
+                       "\",\"query\":\"" + json_escape(q.c_str()) + "\"}";
     p->page = 0;
     LOG("search pressed: prev_search_status=%s stream_status=%s stream_url=%s filter=%s\n",
         core_get(p, "search_status").c_str(), core_get(p, "stream_status").c_str(),
         core_get(p, "stream_url").c_str(), json.c_str());
     p->api->set_param(p->core, "cratedig_filter", json.c_str());
+}
+
+/* A key of the search grid was tapped: type it at the cursor and close the drawn grid. The grid's
+ * last cell types nothing -- the wrapper reports that index as the grid's current value so no real
+ * key is ever the "already selected" one MPC sends nothing for (see params.json). */
+static void grid_pick(Plugin *p, int idx) {
+    if (idx < 0 || idx >= QUERY_KEY_N) return;
+    char c = QUERY_KEY_CHARS[idx];
+    if (c) qe_type(p->query, &p->qpos, c);
+    p->key_open = 0.0f;
+    p->release[P_QUERY_KEY__OPEN] = 1;   /* report "closed" to the host: that hides the grid */
+    p->ui_now = true;
+    LOG("key grid: picked %d ('%c') -> text '%s'\n", idx, c ? c : ' ', p->query);
+}
+
+/* MORE BY ARTIST: re-search the artist of the last result row tapped, no typing. Uses the artist
+ * Discogs gave us (the row's channel) and falls back to the video title before " - " when a
+ * release has none (various-artists compilations), like the row labels do. */
+static void more_by_artist(Plugin *p) {
+    int n = result_count(p);
+    if (n <= 0) { LOG("more-by-artist: no results to take an artist from\n"); return; }
+    int idx = p->sel;
+    if (idx < 0 || idx >= n) idx = 0;
+    std::string artist = core_get_idx(p, "search_result_channel_%d", idx);
+    if (artist.empty()) {
+        std::string t = core_get_idx(p, "search_result_title_%d", idx);
+        size_t dash = t.find(" - ");
+        artist = dash == std::string::npos ? t : t.substr(0, dash);
+    }
+    if (artist.empty()) { LOG("more-by-artist: row %d has no artist\n", idx); return; }
+    qe_set(p->query, &p->qpos, upper(artist).c_str());
+    LOG("more-by-artist: row %d '%s' -> query '%s' (filters %s)\n", idx, artist.c_str(), p->query,
+        filter_summary(p).c_str());
+    do_search(p);
 }
 
 static std::string display(Plugin *p, int i);
@@ -267,7 +328,7 @@ static void worker_main(Plugin *p) {
     auto next_ui = std::chrono::steady_clock::now();
     while (p->running.load()) {
         auto now = std::chrono::steady_clock::now();
-        if (now >= next_ui) {
+        if (p->ui_now.exchange(false) || now >= next_ui) {
             next_ui = now + std::chrono::milliseconds(200);
             flush_releases(p);
             refresh_display(p);
@@ -320,10 +381,18 @@ static void processReplacing(AEffect *e, float **in, float **out, int32_t n) {
 }
 
 /* ---- parameters ----------------------------------------------------------- */
-static int stepper_count(Plugin *p, int i) { return i == P_PAGE ? page_count(p) : dim_count(p, i); }
-static int stepper_index(Plugin *p, int i) { return i == P_PAGE ? p->page : p->dim[i]; }
+static int stepper_count(Plugin *p, int i) {
+    if (i == P_QUERY_POS) return QE_LEN;          /* the search box's cursor: one step per slot */
+    return i == P_PAGE ? page_count(p) : dim_count(p, i);
+}
+static int stepper_index(Plugin *p, int i) {
+    if (i == P_QUERY_POS) return p->qpos;
+    return i == P_PAGE ? p->page : p->dim[i];
+}
 static void stepper_set(Plugin *p, int i, int v) {
-    if (i == P_PAGE) {
+    if (i == P_QUERY_POS) {
+        p->qpos = v < 0 ? 0 : v > QE_LEN - 1 ? QE_LEN - 1 : v;
+    } else if (i == P_PAGE) {
         int n = page_count(p);
         p->page = v < 0 ? 0 : v > n - 1 ? n - 1 : v;
     } else {
@@ -343,6 +412,11 @@ static float getParameter(AEffect *e, int32_t i) {
     case T_FLOAT: return (p->gain - PARAMS[i].min) / (PARAMS[i].max - PARAMS[i].min);
     case T_SLOT: return current_result(p) == p->page * SLOTS + (i - P_RESULT_1) ? 1.0f : 0.0f;
     case T_TRIGGER: return i == P_TRANSPORT_SYNC && p->sync ? 1.0f : 0.0f;   /* sticky: lights the button */
+    case T_FLAG: return p->key_open;   /* the key grid's drawn list, open or closed */
+    /* The key grid always reads as its dead last cell (index N-1, i.e. 1.0): MPC sends nothing for
+     * the cell it believes is already selected, so this keeps every real key tappable -- including
+     * the same letter twice in a row (see params.json). */
+    case T_GRID: return 1.0f;
     default: return 0.0f;
     }
 }
@@ -352,6 +426,19 @@ static void setParameter(AEffect *e, int32_t i, float v) {
     if (i < 0 || i >= NPARAMS) return;
     std::lock_guard<std::mutex> lk(p->lock);
     switch (PARAMS[i].type) {
+    /* The key grid's hidden "open" flag: skin-only state (the host's own toggle), never sent to
+     * the core and never saved -- picking a key clears it, which is what closes the drawn grid. */
+    case T_FLAG:
+        if (p->key_open != (v > 0.5f ? 1.0f : 0.0f)) LOG("key grid %s\n", v > 0.5f ? "opened" : "closed");
+        p->key_open = v > 0.5f ? 1.0f : 0.0f;
+        return;
+    /* A key of the grid: MPC sends the picked cell's own value (a tap on the cell it shows as
+     * selected sends nothing, which is why getParameter pins that to the dead cell). */
+    case T_GRID: {
+        float n = v < 0 ? 0 : v > 1 ? 1 : v;
+        grid_pick(p, (int)std::lround(n * (QUERY_KEY_N - 1)));
+        return;
+    }
     case T_STEPPER: {
         /* Step relative to the last value MPC sent, not by rounding its absolute value: one
          * jog detent moves MPC's 0..1 value by well under half a step, so round(v*(n-1)) left
@@ -389,7 +476,10 @@ static void setParameter(AEffect *e, int32_t i, float v) {
         bool fire = std::fabs(v - p->last[i]) > 0.25f;
         p->last[i] = v;
         int idx = p->page * SLOTS + (i - P_RESULT_1);
-        if (fire && idx < result_count(p)) play_result(p, idx);
+        if (fire && idx < result_count(p)) {
+            p->sel = idx;   /* MORE BY ARTIST re-searches on the row last tapped */
+            play_result(p, idx);
+        }
         return;
     }
     case T_TRIGGER:
@@ -419,6 +509,17 @@ static void setParameter(AEffect *e, int32_t i, float v) {
     } else if (i == P_PAGE_PREV || i == P_PAGE_NEXT) {
         int n = page_count(p);
         stepper_set(p, P_PAGE, (p->page + (i == P_PAGE_NEXT ? 1 : -1) + n) % n);
+    } else if (i == P_QUERY_POS_PREV || i == P_QUERY_POS_NEXT) {
+        stepper_set(p, P_QUERY_POS, p->qpos + (i == P_QUERY_POS_NEXT ? 1 : -1));
+    } else if (i == P_QUERY_DEL) {
+        qe_backspace(p->query, &p->qpos);
+        LOG("search text: delete -> '%s'\n", p->query);
+    } else if (i == P_QUERY_CLEAR) {
+        qe_clear(p->query);
+        p->qpos = 0;
+        LOG("search text: cleared\n");
+    } else if (i == P_QUERY_ARTIST) {
+        more_by_artist(p);
     } else if (i == P_SEARCH) {
         do_search(p);
     } else if (i == P_PLAY_PAUSE && p->hold) {
@@ -427,8 +528,13 @@ static void setParameter(AEffect *e, int32_t i, float v) {
         p->api->set_param(p->core, "hold_start", "0");
     } else if (i == P_PLAY_PAUSE) {
         /* Like the host: with nothing loaded, play the highlighted result. */
-        if (core_get(p, "stream_url").empty()) play_result(p, std::atoi(core_get(p, "cratedig_result_index").c_str()));
-        else p->api->set_param(p->core, "play_pause_step", "trigger");
+        if (core_get(p, "stream_url").empty()) {
+            int idx = std::atoi(core_get(p, "cratedig_result_index").c_str());
+            p->sel = idx;
+            play_result(p, idx);
+        } else {
+            p->api->set_param(p->core, "play_pause_step", "trigger");
+        }
     } else if (i == P_STOP) {
         p->api->set_param(p->core, "stop_step", "trigger");
     } else if (i == P_REWIND_15) {
@@ -444,6 +550,10 @@ static std::string display(Plugin *p, int i) {
         if (i == P_PAGE) {
             char s[32];
             std::snprintf(s, sizeof s, "PAGE %d / %d", p->page + 1, page_count(p));
+            return s;
+        } else if (i == P_QUERY_POS) {
+            char s[32];
+            std::snprintf(s, sizeof s, "POS %d / %d", p->qpos + 1, QE_LEN);
             return s;
         } else {
             const char *v = dim_value(p, i);
@@ -463,6 +573,12 @@ static std::string display(Plugin *p, int i) {
         if (i == P_SYNC_STATE) return p->sync ? "SYNC ON" : "SYNC OFF";
         if (i == P_TIME) return core_get(p, "playback_time");
         if (i == P_SEARCH_STATUS) return upper(core_get(p, "search_status"));
+        if (i == P_QUERY_TEXT) {   /* the search box: the text with the cursor's cell in brackets */
+            char s[QE_LEN * 3];
+            qe_display(p->query, p->qpos, s, (int)sizeof s);
+            return s;
+        }
+        if (i == P_QUERY_FILTERS) return filter_summary(p);
         if (i == P_NOW_PLAYING) {
             int c = current_result(p);
             if (c < 0) return "";
@@ -470,6 +586,10 @@ static std::string display(Plugin *p, int i) {
             return ch.empty() ? t : t + " - " + ch;
         }
         return "";
+    /* The grid's field shows a hint (it is the popup's Text handle); the drawn grid itself comes
+     * from the host, and its open flag is what opens it. */
+    case T_GRID: return "PICK KEY";
+    case T_FLAG: return p->key_open > 0.5f ? std::string("OPEN") : std::string("CLOSED");
     default:
         return "";
     }
@@ -521,6 +641,8 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
     case effGetVendorString: copy_str(ptr, PLUG_VENDOR, 32); return 1;
     case effGetVendorVersion: return PLUG_VERSION;
     case effGetVstVersion: return 2400;
+    /* Like the upstream wrapper, everything but a readout is automatable -- including a popup's
+     * open flag, which upstream leaves automatable too. */
     case effCanBeAutomated: return idx >= 0 && idx < NPARAMS && PARAMS[idx].type != T_READOUT;
     case effGetParamName:
         if (idx >= 0 && idx < NPARAMS) copy_str(ptr, PARAMS[idx].name, 32);
@@ -537,8 +659,10 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
     case effCanDo: return -1;
     case effGetChunk: {
         std::lock_guard<std::mutex> lk(p->lock);
-        std::snprintf(p->chunk, sizeof p->chunk, "g=%d;s=%d;d=%d;r=%d;c=%d;gain=%.3f",
-                      p->dim[0], p->dim[1], p->dim[2], p->dim[3], p->dim[4], p->gain);
+        /* The typed search text rides along after the indexes ("q=" last, so an older preset
+         * without it still parses) -- a saved filter setup should come back with its search. */
+        std::snprintf(p->chunk, sizeof p->chunk, "g=%d;s=%d;d=%d;r=%d;c=%d;gain=%.3f;q=%s",
+                      p->dim[0], p->dim[1], p->dim[2], p->dim[3], p->dim[4], p->gain, p->query);
         *(void **)ptr = p->chunk;
         return (intptr_t)std::strlen(p->chunk) + 1;
     }
@@ -558,10 +682,17 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
         for (int i = 0; i < NPARAMS; i++) p->step_seen[i] = -1.0f;
         set_dim(p, DIM_GENRE, g); set_dim(p, DIM_STYLE, st); set_dim(p, DIM_DECADE, d);
         set_dim(p, DIM_REGION, r); set_dim(p, DIM_COUNTRY, c);
+        /* Presets from before the SEARCH tab have no q=: those restore an empty search box rather
+         * than leaving whatever was typed last time in it. */
+        const char *qs = std::strstr(s, ";q=");
+        if (qs) qe_set(p->query, &p->qpos, qs + 3);
+        else { qe_clear(p->query); p->qpos = 0; }
         char gs[32];
         p->gain = gn;
         std::snprintf(gs, sizeof gs, "%.3f", gn);
         p->api->set_param(p->core, "gain", gs);
+        LOG("effSetChunk restored: filters g=%d s=%d d=%d r=%d c=%d gain=%.3f query='%s'\n",
+            p->dim[0], p->dim[1], p->dim[2], p->dim[3], p->dim[4], p->gain, p->query);
         return 1;
     }
     default: return 0;

@@ -24,7 +24,10 @@ detail. As of v1.06, the actual reason is written to a log file on the device.
 Without a token, the device is capped at 25 Discogs requests/minute, and a single search can
 use up to ~24 of those (one page-count probe, up to 3 page fetches, and up to 4 release
 lookups per result) — so a second search shortly after, or another device on the same
-network, easily trips a rate limit. A free personal token raises the limit to 60/min:
+network, easily trips a rate limit. A free personal token raises the limit to 60/min.
+A text search (the SEARCH tab) is cheaper, not dearer: it walks a few pages at the top of the
+result list in Discogs' own relevance order, so it usually spends one page fetch plus about
+one lookup per result.
 
 1. Get a token at <https://www.discogs.com/settings/developers>.
 2. On the device, create/edit `/data/UserData/schwung/config/webstream_providers.json`:
@@ -57,7 +60,9 @@ reproducing the issue, then check again.
 Open an issue at <https://github.com/sd88me/mpc-vst-cratedigger/issues> with:
 - The exact `search error:` line from `/tmp/webstream-runtime.log`.
 - Whether a Discogs token is configured.
-- The genre/style/decade/region/country filters in use at the time.
+- The genre/style/decade/region/country filters in use at the time, and — on the SEARCH tab —
+  the text in the box (the `search pressed: ... filter=...` line in `/tmp/cratedigger_vst.log`
+  has both).
 
 ## Helping us debug "search stops responding" or "playback breaks after a new search"
 

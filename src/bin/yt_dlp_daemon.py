@@ -746,6 +746,7 @@ class RateLimited(Exception):
 class CrateDigSession:
     DISCOGS_BASE = "https://api.discogs.com"
     MAX_EXCLUDE_IDS = 200
+    MAX_QUERY_LEN = 64
     USER_AGENT = "SchwungWebstream/1.0 +https://github.com/charlesvestal/schwung-webstream"
 
     def __init__(self, token: str = ""):
@@ -754,6 +755,7 @@ class CrateDigSession:
         self.filter_style = ""
         self.filter_decade = ""
         self.filter_country = ""
+        self.filter_query = ""
         self.exclude_ids: list = []
         self.pool_size_cache: dict = {}
 
@@ -786,28 +788,44 @@ class CrateDigSession:
                     continue
                 raise
 
+    def _clean_query(self, value: object) -> str:
+        """The free-text part of the filter, as Discogs' `q` wants it: one line of single-spaced
+        printable ASCII. The plugin's key grid can only produce that set, so this is a guard
+        against a hand-written filter JSON (and the JSON's own escaping) rather than a UI filter."""
+        text = value if isinstance(value, str) else ""
+        text = "".join(ch if 32 <= ord(ch) < 127 else " " for ch in text)
+        return " ".join(text.split())[:self.MAX_QUERY_LEN]
+
     def set_filter(self, filter_json: str):
         data = json.loads(filter_json)
         new_genre = data.get("genre", "")
         new_style = data.get("style", "")
         new_decade = data.get("decade", "")
         new_country = data.get("country", "")
+        new_query = self._clean_query(data.get("query", ""))
         filters_changed = (
             new_genre != self.filter_genre or
             new_style != self.filter_style or
             new_decade != self.filter_decade or
-            new_country != self.filter_country
+            new_country != self.filter_country or
+            new_query != self.filter_query
         )
         self.filter_genre = new_genre
         self.filter_style = new_style
         self.filter_decade = new_decade
         self.filter_country = new_country
+        self.filter_query = new_query
         if filters_changed:
             self.exclude_ids = []
             self.pool_size_cache = {}
 
     def _build_search_params(self) -> dict:
         params = {"type": "release", "per_page": "100"}
+        # Free-text search: Discogs' own `q` (artist, title, label, catno, track... in one box).
+        # It combines with the facet filters below, which is what Discogs does natively -- verified
+        # live 2026-10-07: q=roy ayers&genre=Jazz&year=1976 narrows 666 items down to 50.
+        if self.filter_query:
+            params["q"] = self.filter_query
         if self.filter_genre:
             params["genre"] = self.filter_genre
         if self.filter_style:
@@ -824,7 +842,8 @@ class CrateDigSession:
         return params
 
     def _cache_key(self) -> str:
-        return f"{self.filter_genre}|{self.filter_style}|{self.filter_decade}|{self.filter_country}"
+        return (f"{self.filter_genre}|{self.filter_style}|{self.filter_decade}|"
+                f"{self.filter_country}|{self.filter_query}")
 
     def _get_pool_size_and_first_page(self, params: dict):
         """Returns (pool_pages, first_page_results, first_page_number).
@@ -850,8 +869,98 @@ class CrateDigSession:
         data = self._request("/database/search", probe)
         return pages, data.get("results", []), page
 
+    def _release_item(self, release_id):
+        """One search result entry for a release: its pickable YouTube video plus the Discogs
+        metadata the plugin's result rows show. None when the release has no YouTube video.
+        Raises RateLimited (the caller decides whether partial results are good enough)."""
+        import random
+        release = self._request(f"/releases/{release_id}")
+        videos = release.get("videos") or []
+        # Discogs lists a release's videos in no particular order and they may point anywhere;
+        # only YouTube ones can be resolved by yt-dlp here, so pick one of those at random (the
+        # same "surprise me" a filter search gives -- a specific query still lands on the release).
+        youtube_videos = [v for v in videos if "youtube.com" in (v.get("uri") or "")]
+        if not youtube_videos:
+            return None
+        video = youtube_videos[random.randint(0, len(youtube_videos) - 1)]
+
+        artists = release.get("artists") or []
+        artist_name = artists[0].get("name", "") if artists else ""
+        title = release.get("title", "")
+        genres = release.get("genres") or []
+        styles = release.get("styles") or []
+        return {
+            "id": str(release_id),
+            "title": video.get("title", f"{artist_name} - {title}"),
+            "channel": artist_name,
+            "duration": video.get("duration"),
+            "url": video.get("uri", ""),
+            "genre": ", ".join(genres) if isinstance(genres, list) else "",
+            "style": ", ".join(styles) if isinstance(styles, list) else "",
+            "country": release.get("country") or "",
+            "year": str(release.get("year") or ""),
+        }
+
+    def _get_query_releases(self, count: int) -> list:
+        """The releases matching a typed text query, in Discogs' own relevance order.
+
+        Deliberately the opposite of the filter path: no random page, no shuffle, and no
+        exclude_ids -- a typed query means "this release, please", so searching again for the
+        same thing must land on the same releases instead of shuffling them out of reach.
+        Duplicate entries are dropped by video URL (Discogs lists one release once per pressing,
+        and several of those entries point at the same upload)."""
+        params = self._build_search_params()
+        found: list = []
+        seen_urls: set = set()
+        release_lookups = 0
+        # A relevance-ordered list needs far fewer lookups than the random filter path (whose
+        # candidates are spread over random pages), and each one is its own Discogs call against
+        # the unauthenticated 25/min limit (docs/TROUBLESHOOTING.md) -- so cap near `count`, with
+        # a few spare candidates for releases whose videos are missing or duplicated.
+        max_release_lookups = min(count + 4, 16)
+
+        for page in range(1, 4):   # 100 entries/page, 3 pages = 300 candidates
+            if len(found) >= count or release_lookups >= max_release_lookups:
+                break
+            params["page"] = str(page)
+            try:
+                data = self._request("/database/search", params)
+            except RateLimited:
+                if found:
+                    break
+                raise
+            except Exception:
+                break
+            results = data.get("results") or []
+            if not results:
+                break
+            for entry in results:
+                if len(found) >= count or release_lookups >= max_release_lookups:
+                    break
+                release_id = entry.get("id")
+                if not release_id:
+                    continue
+                release_lookups += 1
+                try:
+                    item = self._release_item(release_id)
+                except RateLimited:
+                    if found:
+                        return found
+                    raise
+                except Exception:
+                    continue
+                if not item or not item["url"] or item["url"] in seen_urls:
+                    continue
+                seen_urls.add(item["url"])
+                found.append(item)
+
+        return found
+
     def get_random_releases(self, count: int = 5) -> list:
         import random
+        if self.filter_query:
+            return self._get_query_releases(count)
+
         params = self._build_search_params()
         pool_size, first_results, first_page = self._get_pool_size_and_first_page(params)
         if pool_size == 0:
@@ -907,54 +1016,21 @@ class CrateDigSession:
 
                 release_lookups += 1
                 try:
-                    release = self._request(f"/releases/{release_id}")
+                    item = self._release_item(release_id)
                 except RateLimited:
                     if found:
                         return found
                     raise
                 except Exception:
                     continue
-
-                videos = release.get("videos", [])
-                if not videos:
+                if not item:
                     continue
-
-                video = videos[random.randint(0, len(videos) - 1)]
-                video_url = video.get("uri", "")
-                if not video_url or "youtube.com" not in video_url:
-                    youtube_videos = [v for v in videos if "youtube.com" in (v.get("uri") or "")]
-                    if not youtube_videos:
-                        continue
-                    video = youtube_videos[random.randint(0, len(youtube_videos) - 1)]
-                    video_url = video.get("uri", "")
-
-                artists = release.get("artists", [])
-                artist_name = artists[0].get("name", "") if artists else ""
-                title = release.get("title", "")
-                year = str(release.get("year") or "")
-                country = release.get("country") or ""
-                genres = release.get("genres") or []
-                styles = release.get("styles") or []
-                genre_str = ", ".join(genres) if isinstance(genres, list) else ""
-                style_str = ", ".join(styles) if isinstance(styles, list) else ""
-                video_title = video.get("title", f"{artist_name} - {title}")
-                video_duration = video.get("duration")
 
                 self.exclude_ids.append(release_id)
                 if len(self.exclude_ids) > self.MAX_EXCLUDE_IDS:
                     self.exclude_ids = self.exclude_ids[-self.MAX_EXCLUDE_IDS:]
 
-                found.append({
-                    "id": str(release_id),
-                    "title": video_title,
-                    "channel": artist_name,
-                    "duration": video_duration,
-                    "url": video_url,
-                    "genre": genre_str,
-                    "style": style_str,
-                    "country": country,
-                    "year": year,
-                })
+                found.append(item)
 
         random.shuffle(found)
         return found

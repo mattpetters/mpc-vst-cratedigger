@@ -41,6 +41,17 @@ plugin skin itself.)
   (depends on Region) — five steppers, a SEARCH button, and a status
   readout, all as VST parameters MPC's Q-Links can reach. The jog wheel
   steps one entry per click, in either direction.
+- **Text search**: a **SEARCH** tab types a search term — artist, title,
+  label, catalogue number, Discogs' own `q=` — for when you know what you
+  are after instead of browsing by facet. The MPC plugin host has no text
+  entry (see [Text search](#text-search)), so the term is typed from a drawn
+  key grid: tap **PICK KEY**, tap a key, and the text lands in **TEXT** with
+  the cursor's cell in brackets. **SEARCH** sends it *alongside* the five
+  steppers above (they combine, as Discogs does natively), and **FILTERS IN
+  USE** shows which of them are set, so a term is never quietly narrowed by
+  a filter left over from browsing. **MORE BY ARTIST** re-searches the artist
+  of the result row you last tapped, with no typing at all. Type nothing and
+  SEARCH behaves exactly as it did before.
 - **Transport**: Play/Pause, Stop, ±15s seek, a gain knob, and NOW
   PLAYING / STATUS / TIME readouts (LCD-style dot-matrix displays for NOW
   PLAYING and TIME).
@@ -68,6 +79,40 @@ plugin skin itself.)
   plugin was converted from. The artwork is drawn by mpc-vst-plugins'
   browser renderer (`vst/build_skin.sh`).
 
+## Text search
+
+Two ways to ask for a specific release or sample rather than a lucky dip:
+
+**Type it** (SEARCH tab). The MPC plugin host gives a plugin no text entry
+at all — a skin is buttons, knobs, lists and parameter text
+([mpc-vst-plugins](https://github.com/sd88me/mpc-vst-plugins)' own notes say
+so: "No text entry on the page") — so the box is typed from a drawn key grid:
+
+1. Tap **PICK KEY** (its grid opens under the field; tap it again to close
+   without picking).
+2. Tap a key — `A`–`Z`, `0`–`9`, `SP` for a space, then `- . ' & / +`. The
+   character lands in **TEXT** at the cursor and the cursor steps on.
+   The grid's last cell is blank on purpose: the host sends nothing for the
+   cell it believes is already selected, so the plugin reports *that* cell as
+   the current key — which is what lets you type the same letter twice.
+   `CURSOR`/`DEL`/`CLEAR TEXT` fix mistakes, and the jog wheel and the
+   SEARCH page's Q-Links drive the cursor and delete keys as well.
+3. Press **SEARCH** — the same button as the FILTERS tab, same flow after it:
+   up to 16 results in the paged list, tap a row to play it.
+
+The term goes to Discogs as `q=` **together with** the genre/style/decade/
+region/country steppers, which is how Discogs itself combines them. That makes
+**FILTERS IN USE** worth a glance: it lists the steppers the next search will
+send (`ANY` when none are set), because a text search is otherwise silently
+narrowed by a filter left over from browsing — most often the decade. A text
+search normally costs fewer Discogs requests than a filter search (it walks the
+top of the result list rather than sampling random pages), and it keeps
+Discogs' relevance order, so the same term twice gives the same releases.
+
+**Or don't type at all**: play or tap a result, then press **MORE BY ARTIST** —
+it re-searches the artist of that row. That is the fastest route to "everything
+else by whoever this is".
+
 ## How it works
 
 - `src/dsp/yt_stream_plugin.c` is the vendored schwung-webstream DSP
@@ -87,6 +132,15 @@ plugin skin itself.)
   append-only); `vst/gen_params.py` turns it into `params_gen.h`.
   `vst/layout.conf` is the skin layout; `vst/gen_skin.py` turns it +
   `params.json` into the shipped `Plugin Skins/` folder.
+- The SEARCH tab's text box is the one piece of the wrapper that is plain
+  logic rather than host glue, so it lives in its own header —
+  `vst/query_edit.h` (slots, cursor, the bracketed display text) — and is
+  checked off-device by `vst/test_query_edit.c`. Its key grid is a skin
+  `popup`, whose hidden `query_key__open` parameter is skin state that never
+  reaches the engine: picking a key clears it, which is what closes the grid.
+  The typed term rides to the daemon inside the same filter JSON the steppers
+  use (no engine change), and the daemon sends it as Discogs' `q=`, walking
+  the result pages in relevance order instead of sampling random ones.
 - No MIDI: `effProcessEvents` is a no-op, matching the original
   addon (`module.json` declared `midi_in`/`midi_out` both false) — this
   isn't a note-driven instrument, it's a browser/player exposed as one so
@@ -119,6 +173,13 @@ vst/build_skin.sh          # build the MPC skin into vst/build/skin/ (Docker; ne
 `vst/build.sh` also prints the plugin's exported symbols, needed shared
 libs, and highest required glibc version — check those against the
 target device before shipping.
+
+The SEARCH tab's text box (`vst/query_edit.h`) needs no device to check —
+it has its own host test:
+
+```sh
+cc -std=c11 -Wall -Wextra -o /tmp/test_query_edit vst/test_query_edit.c && /tmp/test_query_edit
+```
 
 ## Installation
 
@@ -187,6 +248,8 @@ Measured on a Gen1 device (Cortex-A17) with `tools/bench.sh` from
 ## Known limitations
 
 - No MIDI/note control — this is a browser/player, not a synth voice.
+- Typing on the SEARCH tab is two taps per character, and the box holds 32
+  characters: it is for "get me this record", not for long queries.
 - Playback depends on yt-dlp/ffmpeg resolving Discogs' linked sources
   (mostly YouTube) live on the device; those resolution paths do break
   upstream from time to time (see git history for past yt-dlp/Python/zlib
